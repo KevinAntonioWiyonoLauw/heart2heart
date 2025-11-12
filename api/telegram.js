@@ -5,9 +5,12 @@ import { isHighRisk } from "../lib/riskFilter.js";
 const BOT_TOKEN   = process.env.TELEGRAM_BOT_TOKEN;
 const WH_SECRET   = process.env.WH_SECRET;
 const GEMINI_KEY  = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
 
 const ai = new GoogleGenAI({ apiKey: GEMINI_KEY });
+
+const userChats = new Map();
+const userLastRequest = new Map();
+const COOLDOWN_MS = 3000;
 
 async function sendMessage(chatId, text) {
   const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
@@ -16,6 +19,21 @@ async function sendMessage(chatId, text) {
     headers: {"Content-Type":"application/json"},
     body: JSON.stringify({ chat_id: chatId, text })
   });
+}
+
+function getUserChat(chatId) {
+  if (!userChats.has(chatId)) {
+    const chat = ai.chats.create({
+      model: 'gemini-2.0-flash-exp',
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        temperature: 0.8,
+        topP: 0.9,
+      },
+    });
+    userChats.set(chatId, chat);
+  }
+  return userChats.get(chatId);
 }
 
 export default async function handler(req, res) {
@@ -30,12 +48,22 @@ export default async function handler(req, res) {
 
   if (!chatId || !text) return res.status(200).end();
 
+  const now = Date.now();
+  const lastRequest = userLastRequest.get(chatId) || 0;
+  
+  if (now - lastRequest < COOLDOWN_MS && !text.startsWith("/")) {
+    return res.status(200).end();
+  }
+  
+  userLastRequest.set(chatId, now);
+
   if (isHighRisk(text)) {
     await sendMessage(chatId, CRISIS_REPLY);
     return res.status(200).end();
   }
 
   if (text.trim().toLowerCase() === "/start") {
+    userChats.delete(chatId);
     await sendMessage(
       chatId,
       "Hai, terima kasih sudah membuka Heart2Heart. Aku siap mendengarkan. " +
@@ -44,21 +72,35 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
+  if (text.trim().toLowerCase() === "/reset") {
+    userChats.delete(chatId);
+    await sendMessage(chatId, "Percakapan telah direset. Mulai cerita lagi yuk! 💙");
+    return res.status(200).end();
+  }
+
   let reply = "Aku denger kamu. Ceritain lebih lanjut, ya.";
   try {
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: SYSTEM_PROMPT + "\n\nUser: " + text,
-    });
+    const chat = getUserChat(chatId);
     
-    if (response && response.text) {
-      reply = response.text;
+    const stream = await chat.sendMessageStream({ message: text });
+    
+    let fullResponse = '';
+    for await (const chunk of stream) {
+      fullResponse += chunk.text;
+    }
+    
+    if (fullResponse) {
+      reply = fullResponse;
     }
   } catch (e) {
     console.error("Gemini error:", e?.message || e);
+    console.error("Full error:", e);
     
     if (e.status === 429) {
       reply = "Maaf, sistem sedang sibuk. Coba lagi dalam beberapa saat ya. Aku tetap di sini untukmu. 💙";
+    } else if (e.status === 404) {
+      reply = "Maaf, ada masalah teknis. Coba ketik /reset untuk mulai percakapan baru ya.";
+      userChats.delete(chatId);
     }
   }
 
