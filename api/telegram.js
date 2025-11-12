@@ -5,7 +5,7 @@ import { isHighRisk } from "../lib/riskFilter.js";
 const BOT_TOKEN   = process.env.TELEGRAM_BOT_TOKEN;
 const WH_SECRET   = process.env.WH_SECRET;
 const GEMINI_KEY  = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash-exp";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
 
 const ai = new GoogleGenAI({ apiKey: GEMINI_KEY });
 
@@ -56,7 +56,10 @@ export default async function handler(req, res) {
     }
   } catch (e) {
     console.error("Gemini error:", e?.message || e);
-    console.error("Full error:", e);
+    
+    if (e.status === 429) {
+      reply = "Maaf, sistem sedang sibuk. Coba lagi dalam beberapa saat ya. Aku tetap di sini untukmu. 💙";
+    }
   }
 
   await sendMessage(chatId, reply.slice(0, 3900));
