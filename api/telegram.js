@@ -18,6 +18,13 @@ const MAX_CHAT_AGE = 30 * 60 * 1000; // 30 menit
 const RATE_LIMIT = 10; // Max 10 pesan per menit
 const RATE_WINDOW = 60 * 1000;
 
+const MODELS = [
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b', 
+];
+
+let currentModelIndex = 0;
+
 async function sendMessageWithRetry(chatId, text, retries = 3) {
   const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
   
@@ -148,32 +155,56 @@ export default async function handler(req, res) {
   await sendTypingAction(chatId);
 
   let reply = "Aku denger kamu. Ceritain lebih lanjut, ya.";
-  try {
-    const chat = getUserChat(chatId);
-    
-    const stream = await chat.sendMessageStream({ message: text });
-    
-    let fullResponse = '';
-    for await (const chunk of stream) {
-      fullResponse += chunk.text;
-    }
-    
-    if (fullResponse) {
-      reply = fullResponse;
-    }
-  } catch (e) {
-    console.error("Gemini error:", e?.message || e);
-    console.error("Full error:", e);
-    
-    if (e.status === 429) {
-      reply = "Maaf, sistem sedang sibuk. Coba lagi dalam beberapa saat ya. Aku tetap di sini untukmu. 💙";
-    } else if (e.status === 404 || e.status === 500) {
-      reply = "Maaf, ada masalah teknis. Coba ketik /reset untuk mulai percakapan baru ya.";
-      userChats.delete(chatId);
-    } else if (e.status === 400) {
-      reply = "Maaf, aku kesulitan memahami pesanmu. Bisa coba diulangi dengan kata lain?";
-    } else {
-      reply = "Maaf, terjadi kesalahan. Aku tetap di sini untukmu. Coba lagi ya. 💙";
+  let retries = 0;
+  const maxRetries = 3;
+  
+  while (retries < maxRetries) {
+    try {
+      const chat = getUserChat(chatId);
+      
+      const stream = await chat.sendMessageStream({ message: text });
+      
+      let fullResponse = '';
+      for await (const chunk of stream) {
+        fullResponse += chunk.text;
+      }
+      
+      if (fullResponse) {
+        reply = fullResponse;
+      }
+      break;
+      
+    } catch (e) {
+      console.error(`Gemini error (model: ${MODELS[currentModelIndex]}):`, e?.message || e);
+      
+      if (e.status === 429) {
+        retries++;
+        
+        // Coba ganti model jika retry pertama gagal
+        if (retries === 1 && currentModelIndex < MODELS.length - 1) {
+          currentModelIndex++;
+          userChats.delete(chatId); // Reset chat untuk model baru
+          console.log(`Switching to fallback model: ${MODELS[currentModelIndex]}`);
+          continue;
+        }
+        
+        if (retries < maxRetries) {
+          const delay = 10000 * retries; // 10s, 20s, 30s
+          console.log(`Rate limited, retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        
+        reply = "Maaf, sistem sedang sibuk. Coba lagi dalam beberapa menit ya. Aku tetap di sini untukmu. 💙";
+      } else if (e.status === 404 || e.status === 500) {
+        reply = "Maaf, ada masalah teknis. Coba ketik /reset untuk mulai percakapan baru ya.";
+        userChats.delete(chatId);
+      } else if (e.status === 400) {
+        reply = "Maaf, aku kesulitan memahami pesanmu. Bisa coba diulangi dengan kata lain?";
+      } else {
+        reply = "Maaf, terjadi kesalahan. Aku tetap di sini untukmu. Coba lagi ya. 💙";
+      }
+      break;
     }
   }
 
