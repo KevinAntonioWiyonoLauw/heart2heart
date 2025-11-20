@@ -70,7 +70,7 @@ function getUserChat(chatId) {
   
   if (!userChats.has(chatId)) {
     const chat = ai.chats.create({
-      model: 'gemini-2.0-flash-exp',
+      model: MODELS[currentModelIndex],
       config: {
         systemInstruction: SYSTEM_PROMPT,
         temperature: 0.8,
